@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	go func() {
 		goroutine := pprof.Lookup("goroutine")
 		for range time.Tick(1 * time.Second) {
@@ -35,6 +36,9 @@ func main() {
 	sample11()
 	sample12()
 	sample13()
+	sample14()
+	sample15()
+	sample16()
 }
 
 func sample1() {
@@ -340,7 +344,85 @@ func sample13() {
 	}
 
 	wg.Wait()
-	fmt.Printf("%d calculators were created.", numCalcsCreated)
+	fmt.Printf("%d calculators were created.\n", numCalcsCreated)
+}
+
+func sample14() {
+	stringCh := make(chan string)
+	go func() {
+		stringCh <- "Hello channels!"
+	}()
+	salutation, ok := <- stringCh
+	fmt.Printf("(%v): %v\n", ok, salutation)
+
+	intCh := make(chan int)
+	go func() {
+		defer close(intCh)
+		for i := 1; i <= 5; i++ {
+			intCh <- i
+		}
+	}()
+
+	for i := range intCh {
+		fmt.Printf("%v\n", i)
+	}
+}
+
+func sample15() {
+	chanOwner := func() <-chan int {
+		resultCh := make(chan int, 5)
+		go func() {
+			defer close(resultCh)
+			for i := 0; i < 5; i++ {
+				resultCh <- i
+			}
+		}()
+		return resultCh
+	}
+
+	resultCh := chanOwner()
+	for result := range resultCh {
+		fmt.Printf("Received: %d\n", result)
+	}
+	fmt.Println("Done receiving!")
+}
+
+func sample16() {
+	start := time.Now()
+	c := make(chan interface{})
+	go func() {
+		time.Sleep(5 * time.Second)
+		close(c)
+	}()
+
+	fmt.Println("Blocking on read...")
+	select {
+	case <-c:
+		fmt.Printf("Unblocked %v later.\n", time.Since(start))
+	}
+}
+
+func sample17() {
+	c := make(chan interface{})
+	go func() {
+		time.Sleep(5 * time.Second)
+		close(c)
+	}()
+
+	counter := 0
+	loop:
+	for {
+		select {
+		case <-c:
+			break loop
+		default:
+		}
+
+		counter++
+		time.Sleep(1*time.Second)
+	}
+
+	fmt.Printf("Achieved %v cycles of work before signalled to stop.\n", counter)
 }
 
 func connectToService() interface{} {

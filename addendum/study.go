@@ -46,3 +46,7 @@ func doSomething(context context.Context) {
 		printHumanize()
 	}
 }
+
+// CLIを作る時のサードパーティ製ツール
+// https://github.com/mitchellh/cli
+// https://github.com/urfave/cli
