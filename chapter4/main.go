@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -18,6 +19,10 @@ func main() {
 	sample6()
 	sample7()
 	sample8()
+	sample11()
+	sample12()
+	sample13()
+	sample14()
 }
 
 func sample1() {
@@ -353,4 +358,352 @@ func sample8() {
 	for num := range take(done, repeatFn(done, randFn), 10) {
 		fmt.Printf("num is %v\n", num)
 	}
+}
+/*
+func sample9() {
+	fanIn := func(
+		done <-chan interface{},
+		channels ...<-chan interface{},
+	) <-chan interface{} {
+		var wg sync.WaitGroup
+		multiplexedStream := make(chan interface{})
+
+		multiplex := func(c <-chan interface{}) {
+			defer wg.Done()
+			for i := range c {
+				select {
+				case <-done:
+					return
+				case multiplexedStream <- i:
+				}
+			}
+		}
+
+		wg.Add(len(channels))
+		for _, c := range channels {
+			go multiplex(c)
+		}
+
+		go func() {
+			wg.Wait()
+			close(multiplexedStream)
+		}()
+
+		return multiplexedStream
+	}
+
+	done := make(chan interface{})
+	defer close(done)
+
+	start := time.Now()
+
+	rand2 := func() interface{} { return rand.Intn(50000000) }
+	randIntStream := toInt(done, repeatFn(done, rand2))
+
+	numFinders := runtime.NumCPU()
+	fmt.Printf("Spinning up %d prime finders.\n", numFinders)
+	finders := make([]<-chan interface{}, numFinders)
+	fmt.Println("Primes:")
+	for i := 0; i < numFinders; i++ {
+		finders[i] = primeFinder(done, randIntStream) }
+	for prime := range take(done, fanIn(done, finders...), 10) {
+		fmt.Printf("\t%d\n", prime)
+	}
+	fmt.Printf("Search took: %v", time.Since(start))
+}
+*/
+/*
+func sample10() {
+	orDone := func(done ,c <-chan interface{}) <-chan interface{} {
+		valStream := make(chan interface{})
+		go func() {
+			defer close(valStream)
+			for {
+				select {
+				case <-done:
+					return
+				case v, ok := <-c:
+					if ok == false {
+						return
+					}
+					select {
+					case valStream <- v:
+					case <-done:
+					}
+				}
+			}
+		}()
+		return valStream
+	}
+
+	done := make(chan interface{})
+	defer close(done)
+
+	for val := range orDone(done, myChan) {
+		// valに対して何かする
+	}
+}
+*/
+
+func sample11() {
+	orDone := func(done ,c <-chan interface{}) <-chan interface{} {
+		valStream := make(chan interface{})
+		go func() {
+			defer close(valStream)
+			for {
+				select {
+				case <-done:
+					return
+				case v, ok := <-c:
+					if ok == false {
+						return
+					}
+					select {
+					case valStream <- v:
+					case <-done:
+					}
+				}
+			}
+		}()
+		return valStream
+	}
+
+	bridge := func(
+		done <-chan interface{},
+		chanStream <-chan <-chan interface{},
+	) <-chan interface{} {
+		valStream := make(chan interface{})
+		go func() {
+			defer close(valStream)
+			for {
+				var stream <-chan interface{}
+				select {
+				case <-done:
+					return
+				case maybeStream, ok := <-chanStream:
+					if ok == false {
+						return
+					}
+					stream = maybeStream
+				}
+				for val := range orDone(done, stream) {
+					select {
+					case valStream <- val:
+					case <-done:
+					}
+				}
+			}
+
+		}()
+		return valStream
+	}
+
+	genVals := func() <-chan <-chan interface{} {
+		chanStream := make(chan (<-chan interface{}))
+		go func() {
+			defer close(chanStream)
+			for i := 0; i < 10; i++ {
+				stream := make(chan interface{}, 1)
+				stream <- i
+				close(stream)
+				chanStream <- stream
+			}
+		}()
+		return chanStream
+	}
+	for v := range bridge(nil, genVals()) {
+		fmt.Printf("%v ", v)
+	}
+
+}
+
+// Queueとして扱うために、バッファ付きチャネルを使う話。リトルの法則
+
+// Context
+func sample12() {
+	var wg sync.WaitGroup
+	done := make(chan interface{})
+	defer close(done)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printGreeting(done); err != nil {
+			fmt.Printf("%v", err)
+			return
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printFarewell(done); err != nil {
+			fmt.Printf("%v", err)
+			return }
+	}()
+
+	wg.Wait()
+}
+
+func printGreeting(done <-chan interface{}) error {
+	greeting, err := genGreeting(done)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", greeting)
+	return nil
+}
+
+func genGreeting(done <-chan interface{}) (string, error) {
+	switch locale, err := locale(done); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "hello", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+
+func printFarewell(done <-chan interface{}) error {
+	farewell, err := genFarewell(done)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", farewell)
+	return nil
+}
+
+func genFarewell(done <-chan interface{}) (string, error) {
+	switch locale, err := locale(done); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "goodbye", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+
+func locale(done <-chan interface{}) (string, error) {
+	select {
+	case <-done:
+		return "", fmt.Errorf("canceled")
+	case <-time.After(1 * time.Second):
+	}
+	return "EN/US", nil
+}
+
+func sample13() {
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		if err := printGreetingWithContext(ctx); err != nil {
+			fmt.Printf("cannot print greeting: %v\n", err)
+			cancel()
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		if err := printFarewellWithContext(ctx); err != nil {
+			fmt.Printf("cannot print farewell: %v\n", err)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func printGreetingWithContext(ctx context.Context) error {
+	greeting, err := genGreetingWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", greeting)
+	return nil
+}
+
+func printFarewellWithContext(ctx context.Context) error {
+	farewell, err := genFarewellWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", farewell)
+	return nil
+}
+
+func genGreetingWithContext(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
+	switch locale, err := localeWithContext(ctx); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "hello", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+
+func genFarewellWithContext(ctx context.Context) (string, error) {
+	switch locale, err := localeWithContext(ctx); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "goodbye", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+
+func localeWithContext(ctx context.Context) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if deadline.Sub(time.Now().Add(1 * time.Minute)) <= 0 {
+			return "", context.DeadlineExceeded
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(1 * time.Minute):
+	}
+	return "EN/US", nil
+}
+
+type ctxKey int
+
+const (
+	ctxUserID    ctxKey = iota
+	ctxAuthToken
+)
+
+func UserID(c context.Context) string {
+	return c.Value(ctxUserID).(string)
+}
+
+func AuthToken(c context.Context) string {
+	return c.Value(ctxAuthToken).(string)
+}
+
+func sample14() {
+	ProcessRequest("jane", "abc123")
+}
+
+func ProcessRequest(userID, authToken string) {
+	ctx := context.WithValue(context.Background(), ctxUserID, userID)
+	ctx = context.WithValue(ctx, ctxAuthToken, authToken)
+	HandleResponse(ctx)
+}
+
+func HandleResponse(ctx context.Context) {
+	fmt.Printf(
+		"handling response for %v (%v)\n",
+		UserID(ctx),
+		AuthToken(ctx),
+	)
 }
